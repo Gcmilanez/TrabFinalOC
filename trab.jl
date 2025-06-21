@@ -90,9 +90,9 @@ function sol_inicial_gulosa(p::Matrix{Float64}, n::Int, m::Int)
         filter!(x -> x != best_k, workers)
     end
 
-    for i in 1:m
-        println("Segmento: ",(borders[i], borders[i+1]-1), " Operador= ", π[i])
-    end
+    #for i in 1:m
+     #   println("Segmento: ",(borders[i], borders[i+1]-1), " Operador= ", π[i])
+    #end
 
     return borders, π
 end
@@ -246,7 +246,6 @@ function VNS(p::Matrix{Float64}; iter_max::Int=1_000_000)
             f_new = avalia(p, new_b, new_π)
             if f_new < f_best
                 f_best, borders, π = f_new, new_b, new_π
-                @printf("Iter %d: T = %.3f  shake=%d\n", it, f_best, k)
                 k = 1
             else
                 k += 1
@@ -267,13 +266,14 @@ function main()
     bestT = Inf
 
     #testa 100 amostras do VNS até achar sol ótima
-    for _ in 1:100
+    for i in 1:100
         borders,π,T = VNS(p; iter_max=10000000)                            
         if T < bestT
             best_borders = borders
             best_op= π
             bestT = T
         end
+        println("iteração 1=", T)
     end
 
     println("Resultado final: Makespan = ",@sprintf("%.3f",T))
