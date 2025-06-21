@@ -3,7 +3,8 @@
 # Implementação limpa da heurística VNS para o problema Trabalho Balanceado
 
 using Random
-using Dates
+# Definindo semente fixa para reproducibilidade
+Random.seed!(42)
 
 # ————————— Leitura da instância —————————
 function ler_instancia(caminho::String)
@@ -36,66 +37,60 @@ end
 # ————————— Avaliação de solução —————————
 function avalia(p::Matrix{Float64}, borders::Vector{Int}, π::Vector{Int})
     m = length(π)
-    Tmax = 0.0
-    @inbounds for j in 1:m
-        s = 0.0
-        for i in borders[j]:(borders[j+1]-1)
-            s += p[i, π[j]]
-        end
-        Tmax = max(Tmax, s)
-    end
-    return Tmax
+    Tjs = [sum(p[i, π[j]] for i in borders[j]:(borders[j+1]-1)) for j in 1:m]
+    return maximum(Tjs)
 end
 
 # ————————— Solução Inicial Gulosa —————————
-function sol_inicial(p::Matrix{Float64}, n::Int, m::Int)
-    # Gera segmentos aleatórios contíguos via cortes aleatórios
-    cuts = sort(randperm(n-1)[1:m-1])
-    borders = [1; cuts .+ 1; n+1]
-
-    # Calcula matriz de custos C[j,k] para cada segmento e operador
+function sol_inicial_gulosa(p::Matrix{Float64}, n::Int, m::Int)
+    min_times = [minimum(p[i, :]) for i in 1:n]
+    T_ideal = sum(min_times) / m
+    borders = [1]
+    idx = 1
+    for j in 1:m-1
+        load = 0.0
+        while idx <= n - (m - j) && load < T_ideal
+            load += min_times[idx]
+            idx += 1
+        end
+        push!(borders, idx)
+    end
+    push!(borders, n+1)
     C = zeros(Float64, m, m)
     for j in 1:m, k in 1:m
-        for i in borders[j]:(borders[j+1]-1)
-            C[j, k] += p[i, k]
-        end
+        C[j, k] = sum(p[i, k] for i in borders[j]:(borders[j+1]-1))
     end
-
-    # Matching guloso: cada operador usado em exatamente um segmento
+    segments = collect(1:m)
+    workers  = collect(1:m)
     π = zeros(Int, m)
-    used = falses(m)
-    for j in 1:m
-        best_cost = Inf
-        best_k = 0
-        for k in 1:m
-            if !used[k] && C[j, k] < best_cost
-                best_cost = C[j, k]
-                best_k = k
+    while !isempty(segments)
+        best_val, best_j, best_k = Inf, 0, 0
+        for j in segments, k in workers
+            if C[j, k] < best_val
+                best_val, best_j, best_k = C[j, k], j, k
             end
         end
-        π[j] = best_k
-        used[best_k] = true
+        π[best_j] = best_k
+        filter!(x -> x != best_j, segments)
+        filter!(x -> x != best_k, workers)
     end
-
-    # Exibe solução inicial
-    println("Segmentos iniciais aleatórios:")
+    println("Segmentos iniciais:")
     for j in 1:m
-        println("  Segmento $j: [", borders[j], ", ", borders[j+1]-1, "] -> Operador ", π[j])
+        println("  Segmento ", j, ": begin=", borders[j], ", end=", borders[j+1]-1)
     end
-    println("Makespan inicial = ", avalia(p, borders, π))
     return borders, π
 end
 
-# ————————— Vizinhanças (shakes) —————————
-# N₁: swap simples de dois operadores
-function neigh_swap_ops(borders::Vector{Int}, π::Vector{Int})
+# ————————— Vizinhanças —————————
+function neigh_swap_ops(borders::Vector{Int}, π::Vector{Int}, n::Int)
     π2 = copy(π)
-    i, j = rand(1:length(π), 2)
+    # Gera índices válidos em 1:m (comprimento de π)
+    m = length(π)
+    i, j = rand(1:m, 2)
     π2[i], π2[j] = π2[j], π2[i]
     return borders, π2
 end
 
-# N₂: desloca uma fronteira em ±1
 function neigh_shift_border(borders::Vector{Int}, π::Vector{Int}, n::Int)
     b = copy(borders)
     j = rand(2:length(b)-1)
@@ -106,43 +101,7 @@ function neigh_shift_border(borders::Vector{Int}, π::Vector{Int}, n::Int)
     return b, π
 end
 
-# N₃: swap de dois blocos adjacentes de tarefas (tamanho = 2)
-function neigh_block_swap(borders::Vector{Int}, π::Vector{Int})
-    # troca duas fronteiras para permutar blocos
-    b = copy(borders)
-    m = length(b)-1
-    # escolhe blocos j,k e troca posições inteiras
-    j, k = rand(1:m), rand(1:m)
-    while j == k
-        k = rand(1:m)
-    end
-    # swap dos cortes entre b[j] e b[j+1]
-    segj = borders[j]:(borders[j+1]-1)
-    segk = borders[k]:(borders[k+1]-1)
-    # apenas permuta operadores para ilustrar block-swap
-    π2 = copy(π)
-    π2[j], π2[k] = π2[k], π2[j]
-    return b, π2
-end
-
-# N₄: inversão de um sub-bloco de tarefas no particionamento
-function neigh_reverse_block(borders::Vector{Int}, π::Vector{Int})
-    b = copy(borders)
-    m = length(b)-1
-    # escolhe dois segmentos contíguos e inverte ordem das fronteiras internas
-    j = rand(2:length(b)-2)
-    # inverte parte pequena no particionamento
-    b[j], b[j+1] = b[j+1], b[j]
-    return b, π
-end
-
-# Lista de vizinhanças
-const SHAKES = (
-    neigh_swap_ops,
-    neigh_shift_border,
-    neigh_block_swap,
-    neigh_reverse_block
-)
+const NEIGHBORHOODS = (neigh_swap_ops, neigh_shift_border)
 
 # ————————— Busca Local (first-improvement) —————————
 function busca_local(p::Matrix{Float64}, sol::Tuple{Vector{Int},Vector{Int}}, n::Int)
@@ -151,19 +110,14 @@ function busca_local(p::Matrix{Float64}, sol::Tuple{Vector{Int},Vector{Int}}, n:
     improved = true
     while improved
         improved = false
-        best_delta = 0.0
-        best_b, best_π = borders, π
-        for nb in ((b,πv)->neigh_swap_ops(b,πv), (b,πv)->neigh_shift_border(b,πv,n))
-            new_b, new_π = nb(borders, π)
+        for nb in NEIGHBORHOODS
+            new_b, new_π = nb(borders, π, n)
             f_new = avalia(p, new_b, new_π)
-            delta = f_best - f_new
-            if delta > best_delta
-                best_delta, best_b, best_π = delta, new_b, new_π
+            if f_new < f_best
+                borders, π, f_best = new_b, new_π, f_new
+                improved = true
+                break
             end
-        end
-        if best_delta > 0
-            borders, π, f_best = best_b, best_π, f_best - best_delta
-            improved = true
         end
     end
     return borders, π
@@ -172,19 +126,18 @@ end
 # ————————— VNS Principal —————————
 function VNS(p::Matrix{Float64}; iter_max::Int=500, k_max::Int=2)
     n, m = size(p)
-    borders, π = sol_inicial(p,n,m)
-    f_best = avalia(p,borders,π)
-    for iter in 1:iter_max
+    borders, π = sol_inicial_gulosa(p, n, m)
+    f_best = avalia(p, borders, π)
+    for _ in 1:iter_max
         k = 1
         while k ≤ k_max
-            # escolhe shake k em todas as N₁..N₄ (mod k)
-            fnc = SHAKES[mod1(k, length(SHAKES))]
-            candidate = fnc===neigh_shift_border ? fnc(borders,π,n) : fnc(borders,π)
+            candidate = k == 1 ? neigh_swap_ops(borders, π, n) : neigh_shift_border(borders, π, n)
             new_b, new_π = busca_local(p, candidate, n)
-            f_new = avalia(p,new_b,new_π)
+            f_new = avalia(p, new_b, new_π)
             if f_new < f_best
                 println("T= ", f_new)
-                borders, π, f_best = new_b, new_π, f_new; k = 1
+                borders, π, f_best = new_b, new_π, f_new
+                k = 1
             else
                 k += 1
             end
@@ -193,28 +146,16 @@ function VNS(p::Matrix{Float64}; iter_max::Int=500, k_max::Int=2)
     return borders, π, f_best
 end
 
-# ————————— Função Principal com Time Limit via ARGs —————————
+# ————————— Função Principal —————————
 function main()
-
-    arquivo = "testes/tba1.txt"
-    iter = 1000000000
-    k = 4
-    exec_start = Dates.now()
-    println("Início da execução: ", Dates.format(exec_start, "dd/mm/yyyy HH:MM:SS"))
-
+    arquivo = isempty(ARGS) ? "testes/tba1.txt" : ARGS[1]
     println("Lendo instância de '$arquivo'...")
     p, n, m = ler_instancia(arquivo)
-    borders, π, T = VNS(p; iter_max=iter, k_max=k)
-
-    println("Numero maximo de iterações= ", iter)
+    borders, π, T = VNS(p; iter_max=100000000, k_max=10)
     println("n= $n, m= $m")
     println("Segmentos: ", [(borders[j], borders[j+1]-1) for j in 1:length(π)])
     println("Permutação operadores: ", π)
     println("Makespan T = $T")
-    
-    exec_final = Dates.now()
-    println("Final da execução: ", Dates.format(exec_final, "dd/mm/yyyy HH:MM:SS"))
-
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__
