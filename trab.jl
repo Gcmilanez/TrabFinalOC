@@ -278,7 +278,7 @@ function main()
 
     println("Resultado final: Makespan = ",@sprintf("%.3f",T))
     for i in 1:m
-        println("Segmento: ",(borders[i], borders[i+1]-1), " Operador= ", π[i])
+        println("Segmento: ",(best_borders[i], best_borders[i+1]-1), " Operador= ", best_op[i])
     end
 end
 
