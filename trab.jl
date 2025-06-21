@@ -1,28 +1,22 @@
 #!/usr/bin/env julia
 # trab.jl
-# Implementação limpa da heurística VNS para o problema Trabalho Balanceado
+# VNS aprimorado para Trabalho Balanceado com vizinhanças diversificadas
 
-using Random
-using Printf
-# Definindo semente fixa para reproducibilidade
-Random.seed!(314159265)
+using Random, Printf
+# Semente fixa para reproducibilidade
+#Random.seed!(456445)
 
 # ————————— Leitura da instância —————————
 function ler_instancia(caminho::String)
     open(caminho, "r") do io
-        # Número de tarefas (n) e operadores (m)
         n = parse(Int, first(split(strip(readline(io)))))
         m = parse(Int, first(split(strip(readline(io)))))
-        # Pula cabeçalho e tempos padrão
         readline(io)
-        # Armazena, mas não usa diretamente
         std = Float64[]
         while length(std) < n
             append!(std, parse.(Float64, split(strip(readline(io)))))
         end
-        # Pula descrição da matriz p
         readline(io)
-        # Lê matriz p[i,k]
         p = zeros(Float64, n, m)
         for k in 1:m
             vals = Float64[]
@@ -37,8 +31,7 @@ end
 
 # ————————— Avaliação de solução —————————
 function avalia(p::Matrix{Float64}, borders::Vector{Int}, π::Vector{Int})
-    m = length(π)
-    Tjs = [sum(p[i, π[j]] for i in borders[j]:(borders[j+1]-1)) for j in 1:m]
+    Tjs = [sum(p[i, π[j]] for i in borders[j]:(borders[j+1]-1)) for j in 1:length(π)]
     return maximum(Tjs)
 end
 
@@ -46,72 +39,157 @@ end
 function sol_inicial_gulosa(p::Matrix{Float64}, n::Int, m::Int)
     min_times = [minimum(p[i, :]) for i in 1:n]
     T_ideal = sum(min_times) / m
-    borders = [1]
-    idx = 1
+    borders = [1]; idx = 1
     for j in 1:m-1
         load = 0.0
         while idx <= n - (m - j) && load < T_ideal
-            load += min_times[idx]
-            idx += 1
+            load += min_times[idx]; idx += 1
         end
         push!(borders, idx)
     end
     push!(borders, n+1)
-    C = zeros(Float64, m, m)
-    for j in 1:m, k in 1:m
-        C[j, k] = sum(p[i, k] for i in borders[j]:(borders[j+1]-1))
-    end
-    segments = collect(1:m)
-    workers  = collect(1:m)
+    # alocação inicial de operadores
+    C = [sum(p[i,k] for i in borders[j]:(borders[j+1]-1)) for j in 1:m, k in 1:m]
+    segments = collect(1:m); workers = collect(1:m)
     π = zeros(Int, m)
     while !isempty(segments)
-        best_val, best_j, best_k = Inf, 0, 0
+        best_val, bj, wk = Inf, 0, 0
         for j in segments, k in workers
-            if C[j, k] < best_val
-                best_val, best_j, best_k = C[j, k], j, k
+            if C[j,k] < best_val
+                best_val, bj, wk = C[j,k], j, k
             end
         end
-        π[best_j] = best_k
-        filter!(x -> x != best_j, segments)
-        filter!(x -> x != best_k, workers)
-    end
-    println("Segmentos iniciais:")
-    for j in 1:m
-        println("  Segmento ", j, ": begin=", borders[j], ", end=", borders[j+1]-1)
+        π[bj] = wk
+        filter!(x->x!=bj, segments); filter!(x->x!=wk, workers)
     end
     return borders, π
 end
 
-# ————————— Vizinhanças —————————
-function neigh_swap_ops(borders::Vector{Int}, π::Vector{Int}, n::Int)
-    π2 = copy(π)
-    m = length(π)
-    i, j = rand(1:m, 2)
+# ————————— Vizinhanças (Shakes) —————————
+# 1) troca de dois operadores aleatórios
+function neigh_swap(p, borders::Vector{Int}, π::Vector{Int}, n::Int)
+    π2 = copy(π); m = length(π)
+    i = rand(1:m)
+    j = rand(1:m-1)
+    if j == i
+        j += 1
+    end
     π2[i], π2[j] = π2[j], π2[i]
     return borders, π2
 end
 
-function neigh_shift_border(borders::Vector{Int}, π::Vector{Int}, n::Int)
+# 2) shift de fronteira em ±1 (primeiro, último ou interior)
+function neigh_shift1(p, borders::Vector{Int}, π::Vector{Int}, n::Int)
     b = copy(borders)
-    j = rand(2:length(b)-1)
-    dir = rand(Bool) ? 1 : -1
-    if b[j] + dir > b[j-1] + 1 && b[j] + dir < b[j+1]
-        b[j] += dir
+    mseg = length(b) - 1
+    jseg = rand(1:mseg)
+    if jseg == 1
+        # aumenta fim do primeiro segmento
+        if b[2] + 1 < b[3]
+            b[2] += 1
+        end
+    elseif jseg == mseg
+        # diminui início do último segmento
+        if b[mseg] - 1 > b[mseg-1]
+            b[mseg] -= 1
+        end
+    else
+        # interior: move fronteira entre jseg e jseg+1
+        idx = jseg + 1
+        dir = rand(Bool) ? 1 : -1
+        if b[idx] + dir > b[idx-1] + 1 && b[idx] + dir < b[idx+1]
+            b[idx] += dir
+        end
     end
     return b, π
 end
 
-const NEIGHBORHOODS = (neigh_swap_ops, neigh_shift_border)
+# 3) shift de fronteira em ±δ (primeiro, último ou interior)
+function neigh_shift_delta(p, borders::Vector{Int}, π::Vector{Int}, n::Int; δ_max=2)
+    b = copy(borders)
+    mseg = length(b) - 1
+    jseg = rand(1:mseg)
+    δ = rand(-δ_max:δ_max)
+    if δ == 0
+        δ +=1
+    end
+    if jseg == 1
+        # ajusta fim do primeiro segmento
+        newb = clamp(b[2] + δ, b[1] + 1, b[3] - 1)
+        b[2] = newb
+    elseif jseg == mseg
+        # ajusta início do último segmento
+        newb = clamp(b[mseg] + δ, b[mseg-1] + 1, b[mseg+1] - 1)
+        b[mseg] = newb
+    else
+        # interior: move fronteira entre jseg e jseg+1
+        idx = jseg + 1
+        b[idx] = clamp(b[idx] + δ, b[idx-1] + 1, b[idx+1] - 1)
+    end
+    return b, π
+end
+
+# 4) expand1_bestop: shift ±1 e reatribui melhor operador (primeiro, último ou interior)
+function neigh_expand_bestop(p::Matrix{Float64}, borders::Vector{Int}, π::Vector{Int}, n::Int)
+    # aplica shift ±1
+    b, π2 = neigh_shift1(p, borders, π, n)
+    mseg = length(b) - 1
+    jseg = rand(1:mseg)
+    start_i, end_i = b[jseg], b[jseg+1] - 1
+    best_k, best_val = π2[jseg], Inf
+    for k in 1:length(π2)
+        val = sum(p[i, k] for i in start_i:end_i)
+        if val < best_val
+            best_val, best_k = val, k
+        end
+    end
+    # troca para manter unicidade
+    j2 = findfirst(x->x==best_k, π2)
+    π2[j2], π2[jseg] = π2[jseg], π2[j2]
+    return b, π2
+end
+
+# 5) expand_delta_bestop: shift ±δ e reatribui melhor operador (primeiro, último ou interior)
+function neigh_expand_delta_bestop(p::Matrix{Float64}, borders::Vector{Int}, π::Vector{Int}, n::Int; δ_max=2)
+    # aplica shift ±δ
+    b, π2 = neigh_shift_delta(p, borders, π, n; δ_max=δ_max)
+    mseg = length(b) - 1
+    jseg = rand(1:mseg)
+    start_i, end_i = b[jseg], b[jseg+1] - 1
+    best_k, best_val = π2[jseg], Inf
+    for k in 1:length(π2)
+        val = sum(p[i, k] for i in start_i:end_i)
+        if val < best_val
+            best_val, best_k = val, k
+        end
+    end
+    # troca para manter unicidade
+    j2 = findfirst(x->x==best_k, π2)
+    π2[j2], π2[jseg] = π2[jseg], π2[j2]
+    return b, π2
+end
+
+# lista de vizinhanças de shake 
+const NEIGHS = (
+    neigh_swap,
+    neigh_shift1,
+    neigh_shift_delta,
+    neigh_expand_bestop,
+    neigh_expand_delta_bestop, 
+)
 
 # ————————— Busca Local (first-improvement) —————————
 function busca_local(p::Matrix{Float64}, sol::Tuple{Vector{Int},Vector{Int}}, n::Int)
+    # sol é (borders, π)
     borders, π = sol
     f_best = avalia(p, borders, π)
     improved = true
+    # percorre todas as vizinhanças de shake como busca local
     while improved
         improved = false
-        for nb in NEIGHBORHOODS
-            new_b, new_π = nb(borders, π, n)
+        for nb in NEIGHS
+            # chama cada vizinhança com os 4 parâmetros: p, borders, π, n
+            new_b, new_π = nb(p, borders, π, n)
             f_new = avalia(p, new_b, new_π)
             if f_new < f_best
                 borders, π, f_best = new_b, new_π, f_new
@@ -123,20 +201,21 @@ function busca_local(p::Matrix{Float64}, sol::Tuple{Vector{Int},Vector{Int}}, n:
     return borders, π
 end
 
-# ————————— VNS Principal —————————
-function VNS(p::Matrix{Float64}; iter_max::Int=500, k_max::Int=2)
+# ————————— VNS Principal ————————— —————————
+function VNS(p::Matrix{Float64}; iter_max::Int=1_000_000)
     n, m = size(p)
     borders, π = sol_inicial_gulosa(p, n, m)
     f_best = avalia(p, borders, π)
-    for _ in 1:iter_max
+    k_max = length(NEIGHS)
+    for it in 1:iter_max
         k = 1
         while k ≤ k_max
-            candidate = k == 1 ? neigh_swap_ops(borders, π, n) : neigh_shift_border(borders, π, n)
+            candidate = NEIGHS[k](p, borders, π, n)
             new_b, new_π = busca_local(p, candidate, n)
             f_new = avalia(p, new_b, new_π)
             if f_new < f_best
-                @printf("Makespan T = %.3f\n", f_new)
-                borders, π, f_best = new_b, new_π, f_new
+                f_best, borders, π = f_new, new_b, new_π
+                @printf("Iter %d: T = %.3f  shake=%d\n", it, f_best, k)
                 k = 1
             else
                 k += 1
@@ -146,18 +225,43 @@ function VNS(p::Matrix{Float64}; iter_max::Int=500, k_max::Int=2)
     return borders, π, f_best
 end
 
-# ————————— Função Principal —————————
-function main()
-    arquivo = isempty(ARGS) ? "testes/tba1.txt" : ARGS[1]
-    println("Lendo instância de '$arquivo'...")
-    p, n, m = ler_instancia(arquivo)
-    borders, π, T = VNS(p; iter_max=100000000, k_max=2)
-    println("n= $n, m= $m")
-    println("Segmentos: ", [(borders[j], borders[j+1]-1) for j in 1:length(π)])
-    println("Permutação operadores: ", π)
-    println("Makespan T = $T")
+# ————————— VNS Principal —————————
+function VNS(p; iter_max=1_000_000, k_max=length(NEIGHS))
+    n,m = size(p)
+    borders, π = sol_inicial_gulosa(p,n,m)
+    f_best = avalia(p,borders,π)
+    for it in 1:iter_max
+        k = 1
+        while k ≤ k_max
+            # shake com vizinhança k
+            candidate = NEIGHS[k](borders,π,n)
+            # intensificação
+            new_b,new_π = busca_local(p,candidate,n)
+            f_new = avalia(p,new_b,new_π)
+            if f_new < f_best
+                f_best, borders, π = f_new, new_b, new_π
+                @printf("Iter %d: T = %.3f  shake=%d\n", it, f_best, k)
+                k = 1
+            else
+                k += 1
+            end
+        end
+    end
+    return borders, π, f_best
 end
 
-if abspath(PROGRAM_FILE) == @__FILE__
+# ————————— Main —————————
+function main()
+    arquivo = "testes/tba1.txt"
+    println("Lendo instancia: ",arquivo)
+    p,n,m = ler_instancia(arquivo)
+    borders,π,T = VNS(p; iter_max=100000000)
+    println("Resultado final: Makespan = ",@sprintf("%.3f",T))
+    for i in 1:m
+        println("Segmento: ",(borders[i], borders[i+1]-1), " Operador= ", π[i])
+    end
+end
+
+if abspath(PROGRAM_FILE)==@__FILE__
     main()
 end
