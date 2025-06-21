@@ -273,7 +273,7 @@ function main()
             best_op= π
             bestT = T
         end
-        println("iteração 1=", T)
+        println("iteração ",i, " T= ", T)
     end
 
     println("Resultado final: Makespan = ",@sprintf("%.3f",T))
