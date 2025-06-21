@@ -275,6 +275,7 @@ function main()
             bestT = T
         end
     end
+
     println("Resultado final: Makespan = ",@sprintf("%.3f",T))
     for i in 1:m
         println("Segmento: ",(borders[i], borders[i+1]-1), " Operador= ", π[i])
