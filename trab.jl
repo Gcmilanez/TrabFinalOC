@@ -43,7 +43,7 @@ function sol_inicial_gulosa(p::Matrix{Float64}, n::Int, m::Int)
     # 1) Gera m-1 pontos de corte aleatórios distintos entre 2 e n
     perm_cuts = randperm(n-1) .+ 1
     cuts = sort(perm_cuts[1:m-1])
-    borders = [1; cuts; n]
+    borders = [1; cuts; n+1]
 
     # 2) Atribui operadores aleatoriamente: permutação de 1:m
     π = collect(randperm(m))
