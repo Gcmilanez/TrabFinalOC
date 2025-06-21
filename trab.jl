@@ -40,60 +40,13 @@ end
 
 # ————————— Solução Inicial Gulosa —————————
 function sol_inicial_gulosa(p::Matrix{Float64}, n::Int, m::Int)
-    #  Para cada tarefa i, calcula o tempo mínimo possível dentre todos os operadores
-    min_times = [minimum(p[i, :]) for i in 1:n]
+    # 1) Gera m-1 pontos de corte aleatórios distintos entre 2 e n
+    perm_cuts = randperm(n-1) .+ 1
+    cuts = sort(perm_cuts[1:m-1])
+    borders = [1; cuts; n]
 
-    #  Tempo médio ideal por operador: soma dos mínimos dividida por m
-    T_ideal = sum(min_times) / m
-
-    #  Construção gulosa das fronteiras (borders)
-    borders = [1]        # sempre começa em 1
-    idx = 1              # índice da próxima tarefa a alocar
-    for j in 1:m-1
-        load = 0.0
-        # atribui contiguamente ao segmento j até que a carga >= T_ideal
-        # mas garantindo que ainda reste espaço para os segmentos seguintes
-        while idx <= (n - (m - j)) && load < T_ideal
-            load += min_times[idx]
-            idx += 1
-        end
-        push!(borders, idx)  # marca corte: o segmento j vai de borders[j] até idx-1
-    end
-    push!(borders, n+1)   # adiciona fronteira final (fim da última tarefa + 1)
-
-
-    #    Monta a matriz de custos C[j,k]:
-    #    custo de atribuir o segmento j ao operador k
-    C = [ sum(p[i, k] for i in borders[j]:(borders[j+1]-1))
-          for j in 1:m, k in 1:m ]
-
-    # 5) Faz um matching guloso entre segmentos e operadores
-    segments = collect(1:m)   # lista de segmentos ainda sem operador
-    workers  = collect(1:m)   # lista de operadores disponíveis
-    π = zeros(Int, m)         # vector de permutação: π[j] será o operador de j
-
-    # enquanto houver segmento ou operador sem par
-    while !isempty(segments)
-        best_val = Inf
-        best_j = 0
-        best_k = 0
-        # procura par (j,k) com menor custo C[j,k]
-        for j in segments, k in workers
-            if C[j, k] < best_val
-                best_val, best_j, best_k = C[j, k], j, k
-            end
-        end
-        # fixa π[best_j] = best_k
-        π[best_j] = best_k
-        # remove o segmento e o operador escolhidos das listas
-        filter!(x -> x != best_j, segments)
-        filter!(x -> x != best_k, workers)
-    end
-
-    #for i in 1:m
-     #   println("Segmento: ",(borders[i], borders[i+1]-1), " Operador= ", π[i])
-    #end
-
+    # 2) Atribui operadores aleatoriamente: permutação de 1:m
+    π = collect(randperm(m))
     return borders, π
 end
 
@@ -267,7 +220,7 @@ function main()
 
     #testa 100 amostras do VNS até achar sol ótima
     for i in 1:100
-        borders,π,T = VNS(p; iter_max=10000000)                            
+        borders,π,T = VNS(p; iter_max=5000000)                            
         if T < bestT
             best_borders = borders
             best_op= π
