@@ -48,48 +48,41 @@ function avalia(p::Matrix{Float64}, borders::Vector{Int}, π::Vector{Int})
 end
 
 # ————————— Solução Inicial Gulosa —————————
-function sol_inicial_gulosa(p::Matrix{Float64}, n::Int, m::Int)
-    # Partição contígua por número de tarefas (segmentos podem ter qualquer tamanho)
-    borders = [1]
-    base = div(n, m)
-    rem = n % m
-    idx = 1
-    for j in 1:m-1
-        sz = base + (j <= rem ? 1 : 0)
-        idx += sz
-        push!(borders, idx)
-    end
-    push!(borders, n+1)
+function sol_inicial(p::Matrix{Float64}, n::Int, m::Int)
+    # Gera segmentos aleatórios contíguos via cortes aleatórios
+    cuts = sort(randperm(n-1)[1:m-1])
+    borders = [1; cuts .+ 1; n+1]
 
-    # Monta matriz de custos C[j,k]
+    # Calcula matriz de custos C[j,k] para cada segmento e operador
     C = zeros(Float64, m, m)
-    for j in 1:m, k in 1:m, i in borders[j]:(borders[j+1]-1)
-        C[j, k] += p[i, k]
+    for j in 1:m, k in 1:m
+        for i in borders[j]:(borders[j+1]-1)
+            C[j, k] += p[i, k]
+        end
     end
 
-    # Matching guloso para permutação inicial π
+    # Matching guloso: cada operador usado em exatamente um segmento
     π = zeros(Int, m)
-    segs = collect(1:m)
-    works = collect(1:m)
-    while !isempty(segs)
-        best, bj, bk = Inf, 0, 0
-        for j in segs, k in works
-            if C[j, k] < best
-                best, bj, bk = C[j, k], j, k
+    used = falses(m)
+    for j in 1:m
+        best_cost = Inf
+        best_k = 0
+        for k in 1:m
+            if !used[k] && C[j, k] < best_cost
+                best_cost = C[j, k]
+                best_k = k
             end
         end
-        π[bj] = bk
-        filter!(x -> x != bj, segs)
-        filter!(x -> x != bk, works)
+        π[j] = best_k
+        used[best_k] = true
     end
 
-    # Imprime segmentos iniciais
-    println("Segmentos iniciais:")
+    # Exibe solução inicial
+    println("Segmentos iniciais aleatórios:")
     for j in 1:m
-        println("  Segmento $j: [$(borders[j]), $(borders[j+1]-1)]")
+        println("  Segmento $j: [", borders[j], ", ", borders[j+1]-1, "] -> Operador ", π[j])
     end
     println("Makespan inicial = ", avalia(p, borders, π))
-    println("Operadores= ", π)
     return borders, π
 end
 
@@ -179,7 +172,7 @@ end
 # ————————— VNS Principal —————————
 function VNS(p::Matrix{Float64}; iter_max::Int=500, k_max::Int=2)
     n, m = size(p)
-    borders, π = sol_inicial_gulosa(p,n,m)
+    borders, π = sol_inicial(p,n,m)
     f_best = avalia(p,borders,π)
     for iter in 1:iter_max
         k = 1
@@ -203,7 +196,7 @@ end
 # ————————— Função Principal com Time Limit via ARGs —————————
 function main()
 
-    arquivo = "testes/tba5.txt"
+    arquivo = "testes/tba1.txt"
     iter = 1000000000
     k = 4
     exec_start = Dates.now()
