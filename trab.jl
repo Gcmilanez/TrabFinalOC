@@ -3,8 +3,9 @@
 # Implementação limpa da heurística VNS para o problema Trabalho Balanceado
 
 using Random
+using Printf
 # Definindo semente fixa para reproducibilidade
-Random.seed!(42)
+Random.seed!(314159265)
 
 # ————————— Leitura da instância —————————
 function ler_instancia(caminho::String)
@@ -84,7 +85,6 @@ end
 # ————————— Vizinhanças —————————
 function neigh_swap_ops(borders::Vector{Int}, π::Vector{Int}, n::Int)
     π2 = copy(π)
-    # Gera índices válidos em 1:m (comprimento de π)
     m = length(π)
     i, j = rand(1:m, 2)
     π2[i], π2[j] = π2[j], π2[i]
@@ -135,7 +135,7 @@ function VNS(p::Matrix{Float64}; iter_max::Int=500, k_max::Int=2)
             new_b, new_π = busca_local(p, candidate, n)
             f_new = avalia(p, new_b, new_π)
             if f_new < f_best
-                println("T= ", f_new)
+                @printf("Makespan T = %.3f\n", f_new)
                 borders, π, f_best = new_b, new_π, f_new
                 k = 1
             else
@@ -151,7 +151,7 @@ function main()
     arquivo = isempty(ARGS) ? "testes/tba1.txt" : ARGS[1]
     println("Lendo instância de '$arquivo'...")
     p, n, m = ler_instancia(arquivo)
-    borders, π, T = VNS(p; iter_max=100000000, k_max=10)
+    borders, π, T = VNS(p; iter_max=100000000, k_max=2)
     println("n= $n, m= $m")
     println("Segmentos: ", [(borders[j], borders[j+1]-1) for j in 1:length(π)])
     println("Permutação operadores: ", π)
