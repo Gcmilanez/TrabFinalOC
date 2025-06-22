@@ -210,7 +210,7 @@ end
 
 # ————————— Main —————————
 function main()
-    arquivo = "testes/tba1.txt"
+    arquivo = "testes/tba9.txt"
     println("Lendo instancia: ",arquivo)
     p,n,m = ler_instancia(arquivo)
 
@@ -219,7 +219,7 @@ function main()
     bestT = Inf
 
     #testa 100 amostras do VNS até achar sol ótima
-    for i in 1:100
+    for i in 1:2
         borders,π,T = VNS(p; iter_max=5000000)                            
         if T < bestT
             best_borders = borders
@@ -229,7 +229,7 @@ function main()
         println("iteração ",i, " T= ", T)
     end
 
-    println("Resultado final: Makespan = ",@sprintf("%.3f",T))
+    println("Resultado final: Makespan = ",@sprintf("%.3f",bestT))
     for i in 1:m
         println("Segmento: ",(best_borders[i], best_borders[i+1]-1), " Operador= ", best_op[i])
     end
