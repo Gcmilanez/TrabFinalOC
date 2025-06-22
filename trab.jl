@@ -218,8 +218,8 @@ function main()
     best_op= []
     bestT = Inf
 
-    #testa 100 amostras do VNS até achar sol ótima
-    for i in 1:2
+    #testa 20 amostras do VNS até achar sol ótima
+    for i in 1:20
         borders,π,T = VNS(p; iter_max=5000000)                            
         if T < bestT
             best_borders = borders
