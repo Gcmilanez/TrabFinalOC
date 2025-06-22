@@ -1,6 +1,6 @@
 #!/usr/bin/env julia
 # coleta_dados_solver.jl
-# Coleta sistemática de dados do Solver para Trabalho Balanceado
+# Coleta sistemática de dados com formulação simplificada
 
 using JuMP, GLPK, Printf, Dates, Statistics
 
@@ -27,182 +27,367 @@ function ler_instancia(caminho::String)
     end
 end
 
-# ————————— Solver com coleta detalhada de dados —————————
-function resolver_instancia_completo(p::Matrix{Float64}, n::Int, m::Int, instancia_nome::String; solver_time_limit=18000)
-    println("Iniciando resolução de $instancia_nome...")
-    tempo_inicio_total = time()
+# ————————— HEURÍSTICA GULOSA COM COLETA DE DADOS —————————
+function heuristica_gulosa_dados(p::Matrix{Float64}, n::Int, m::Int)
+    tempo_inicio = time()
     
-    resultado = Dict(
-        :instancia => instancia_nome,
-        :n => n,
-        :m => m,
-        :tempo_inicio => Dates.now(),
-        :solver_timeout => solver_time_limit
-    )
+    # Inicializar
+    operadores_tempo = zeros(Float64, m)
+    operadores_tarefas = [Int[] for _ in 1:m]
+    decisoes_por_tarefa = []
     
-    # ————————— BOUND INFERIOR (modelo relaxado) —————————
-    println("Calculando bound inferior (modelo sem contiguidade)...")
-    
-    model_bound = Model(GLPK.Optimizer)
-    set_time_limit_sec(model_bound, 300)  # 5 min para bound
-    
-    @variable(model_bound, y[i=1:n, k=1:m], Bin)
-    @variable(model_bound, T_bound >= 0)
-    @objective(model_bound, Min, T_bound)
-    @constraint(model_bound, [i=1:n], sum(y[i,k] for k=1:m) == 1)
-    @constraint(model_bound, [k=1:m], sum(p[i,k] * y[i,k] for i=1:n) <= T_bound)
-    
-    tempo_bound = @elapsed optimize!(model_bound)
-    
-    if termination_status(model_bound) == MOI.OPTIMAL
-        resultado[:bound_inferior] = objective_value(model_bound)
-        resultado[:tempo_bound] = tempo_bound
+    # Para cada tarefa, escolher o operador que resulta no menor makespan
+    for i in 1:n
+        melhor_op = 1
+        melhor_tempo = operadores_tempo[1] + p[i, 1]
+        tempos_opcoes = Float64[]
         
-        # Extração da solução relaxada
-        y_sol = value.(y)
-        atribuicoes_relaxadas = []
         for k in 1:m
-            tarefas_k = [i for i in 1:n if y_sol[i,k] > 0.5]
-            if !isempty(tarefas_k)
-                tempo_k = sum(p[i,k] for i in tarefas_k)
-                push!(atribuicoes_relaxadas, (operador=k, tarefas=tarefas_k, tempo=tempo_k))
+            tempo_total = operadores_tempo[k] + p[i, k]
+            push!(tempos_opcoes, tempo_total)
+            if tempo_total < melhor_tempo
+                melhor_tempo = tempo_total
+                melhor_op = k
             end
         end
-        resultado[:solucao_relaxada] = atribuicoes_relaxadas
-        println("Bound inferior: $(round(resultado[:bound_inferior], digits=6)) ($(round(tempo_bound, digits=2))s)")
-    else
-        resultado[:bound_inferior] = nothing
-        resultado[:tempo_bound] = tempo_bound
-        println("Falha no cálculo do bound ($(round(tempo_bound, digits=2))s)")
+        
+        # Atribuir tarefa ao melhor operador
+        push!(operadores_tarefas[melhor_op], i)
+        operadores_tempo[melhor_op] += p[i, melhor_op]
+        
+        # Métricas de decisão
+        push!(decisoes_por_tarefa, (
+            tarefa = i,
+            operador_escolhido = melhor_op,
+            tempo_escolhido = p[i, melhor_op],
+            makespan_resultante = melhor_tempo,
+            opcoes_tempo = copy(tempos_opcoes)
+        ))
     end
     
-    # ————————— MODELO COMPLETO (com contiguidade) —————————
-    println("Resolvendo modelo completo (timeout: $(solver_time_limit/3600)h)...")
-    tempo_inicio_modelo = time()
+    tempo_total = time() - tempo_inicio
+    makespan = maximum(operadores_tempo)
+    
+    # Calcular métricas adicionais
+    balanceamento = std(operadores_tempo) / mean(operadores_tempo)  # Coeficiente de variação
+    utilizacao = [length(operadores_tarefas[k]) for k in 1:m]
+    operadores_usados = count(t -> t > 0, operadores_tempo)
+    
+    return Dict(
+        :tipo => "heuristica_gulosa",
+        :makespan => makespan,
+        :tempo_execucao => tempo_total,
+        :operadores_tempo => operadores_tempo,
+        :operadores_tarefas => operadores_tarefas,
+        :balanceamento => balanceamento,
+        :utilizacao => utilizacao,
+        :operadores_usados => operadores_usados,
+        :decisoes => decisoes_por_tarefa
+    )
+end
+
+# ————————— HEURÍSTICA COM CONTIGUIDADE COM DADOS —————————
+function heuristica_contiguidade_dados(p::Matrix{Float64}, n::Int, m::Int)
+    tempo_inicio = time()
+    
+    # Primeiro, resolver sem contiguidade
+    resultado_gulosa = heuristica_gulosa_dados(p, n, m)
+    tarefas_por_op = resultado_gulosa[:operadores_tarefas]
+    
+    # Reorganizar para garantir contiguidade
+    ordem_ops = sort(1:m, by = k -> isempty(tarefas_por_op[k]) ? Inf : minimum(tarefas_por_op[k]))
+    
+    # Reagrupar tarefas de forma contígua
+    nova_atribuicao = [Int[] for _ in 1:m]
+    tarefa_atual = 1
+    mudancas_realizadas = 0
+    
+    for k in ordem_ops
+        if !isempty(tarefas_por_op[k])
+            num_tarefas = length(tarefas_por_op[k])
+            tarefas_originais = copy(tarefas_por_op[k])
+            
+            # Atribuir tarefas sequenciais
+            for _ in 1:num_tarefas
+                if tarefa_atual <= n
+                    push!(nova_atribuicao[k], tarefa_atual)
+                    tarefa_atual += 1
+                end
+            end
+            
+            # Contar mudanças
+            if nova_atribuicao[k] != sort(tarefas_originais)
+                mudancas_realizadas += 1
+            end
+        end
+    end
+    
+    # Calcular novo makespan
+    novos_tempos = zeros(Float64, m)
+    for k in 1:m
+        if !isempty(nova_atribuicao[k])
+            novos_tempos[k] = sum(p[i, k] for i in nova_atribuicao[k])
+        end
+    end
+    
+    tempo_total = time() - tempo_inicio
+    novo_makespan = maximum(novos_tempos)
+    
+    # Métricas de transformação
+    perda_qualidade = 100 * (novo_makespan - resultado_gulosa[:makespan]) / resultado_gulosa[:makespan]
+    novo_balanceamento = std(novos_tempos) / mean(novos_tempos)
+    
+    return Dict(
+        :tipo => "heuristica_contiguidade",
+        :makespan => novo_makespan,
+        :tempo_execucao => tempo_total,
+        :operadores_tempo => novos_tempos,
+        :operadores_tarefas => nova_atribuicao,
+        :balanceamento => novo_balanceamento,
+        :mudancas_realizadas => mudancas_realizadas,
+        :perda_qualidade => perda_qualidade,
+        :makespan_original => resultado_gulosa[:makespan]
+    )
+end
+
+# ————————— SOLVER SIMPLES COM DADOS —————————
+function solver_simples_dados(p::Matrix{Float64}, n::Int, m::Int; solver_time_limit=120)
+    tempo_inicio = time()
     
     model = Model(GLPK.Optimizer)
     set_time_limit_sec(model, solver_time_limit)
+    set_silent(model)
     
-    # Variáveis de decisão
-    @variable(model, x[i=1:n, s=1:m], Bin)  # x[i,s] = 1 se tarefa i pertence ao segmento s
-    @variable(model, z[s=1:m, k=1:m], Bin)  # z[s,k] = 1 se segmento s é atribuído ao operador k
-    @variable(model, w[i=1:n, s=1:m, k=1:m], Bin)  # variável auxiliar para linearização
-    @variable(model, T >= 0)  # makespan
-    @variable(model, b[s=1:m+1], Int)  # pontos de corte
+    @variable(model, y[i=1:n, k=1:m], Bin)
+    @variable(model, T >= 0)
     
-    # Função objetivo
     @objective(model, Min, T)
     
-    # Restrições
-    @constraint(model, [i=1:n], sum(x[i,s] for s=1:m) == 1)
-    @constraint(model, [s=1:m], sum(z[s,k] for k=1:m) == 1)
-    @constraint(model, [k=1:m], sum(z[s,k] for s=1:m) == 1)
-    @constraint(model, [i=1:n, s=1:m, k=1:m], w[i,s,k] <= x[i,s])
-    @constraint(model, [i=1:n, s=1:m, k=1:m], w[i,s,k] <= z[s,k])
-    @constraint(model, [i=1:n, s=1:m, k=1:m], w[i,s,k] >= x[i,s] + z[s,k] - 1)
-    @constraint(model, [s=1:m], sum(sum(p[i,k] * w[i,s,k] for k=1:m) for i=1:n) <= T)
-    @constraint(model, b[1] == 1)
-    @constraint(model, b[m+1] == n+1)
-    @constraint(model, [s=1:m], b[s] <= b[s+1])
-    @constraint(model, [i=1:n, s=1:m], b[s] <= i + (1 - x[i,s]) * n)
-    @constraint(model, [i=1:n, s=1:m], i <= b[s+1] - 1 + (1 - x[i,s]) * n)
+    @constraint(model, [i=1:n], sum(y[i,k] for k=1:m) == 1)
+    @constraint(model, [k=1:m], sum(p[i,k] * y[i,k] for i=1:n) <= T)
     
-    # Informações do modelo
     num_vars = num_variables(model)
     num_constrs = num_constraints(model; count_variable_in_set_constraints=false)
-    println("Modelo: $num_vars variáveis, $num_constrs restrições")
     
-    resultado[:num_variaveis] = num_vars
-    resultado[:num_restricoes] = num_constrs
-    
-    # Resolver
     optimize!(model)
     
-    tempo_solver = time() - tempo_inicio_modelo
+    tempo_solver = time() - tempo_inicio
     status = termination_status(model)
     
-    resultado[:status_solver] = status
-    resultado[:tempo_solver] = tempo_solver
-    resultado[:tempo_fim] = Dates.now()
+    resultado = Dict(
+        :tipo => "solver_simples",
+        :status => status,
+        :tempo_execucao => tempo_solver,
+        :num_variaveis => num_vars,
+        :num_restricoes => num_constrs,
+        :timeout_configurado => solver_time_limit
+    )
     
-    # ————————— ANÁLISE DOS RESULTADOS —————————
-    if status == MOI.OPTIMAL
-        println("SOLUÇÃO ÓTIMA encontrada!")
-        resultado[:makespan_otimo] = objective_value(model)
-        resultado[:gap_final] = 0.0
-        
-        # Extrair solução detalhada
-        x_sol = value.(x)
-        z_sol = value.(z)
-        b_sol = value.(b)
-        
-        segmentos = []
-        operadores = []
-        tempos_segmentos = []
-        
-        for s in 1:m
-            tarefas = [i for i in 1:n if x_sol[i,s] > 0.5]
-            if !isempty(tarefas)
-                inicio, fim = minimum(tarefas), maximum(tarefas)
-                operador = findfirst(k -> z_sol[s,k] > 0.5, 1:m)
-                tempo_seg = sum(p[i, operador] for i in tarefas)
-                
-                push!(segmentos, (inicio=inicio, fim=fim, tarefas=tarefas))
-                push!(operadores, operador)
-                push!(tempos_segmentos, tempo_seg)
-            end
-        end
-        
-        resultado[:segmentos] = segmentos
-        resultado[:operadores] = operadores
-        resultado[:tempos_segmentos] = tempos_segmentos
-        resultado[:pontos_corte] = Int.(round.(b_sol))
-        
-        # Verificação da solução
-        makespan_verificado = maximum(tempos_segmentos)
-        resultado[:makespan_verificado] = makespan_verificado
-        
-    elseif status == MOI.TIME_LIMIT
-        println("TIMEOUT atingido!")
-        try
-            melhor_solucao = objective_value(model)
-            resultado[:melhor_solucao_timeout] = melhor_solucao
+    if status == MOI.OPTIMAL || status == MOI.TIME_LIMIT || status == MOI.FEASIBLE_POINT
+        if has_values(model)
+            makespan = objective_value(model)
+            y_sol = value.(y)
             
-            if resultado[:bound_inferior] !== nothing
-                gap = 100 * (melhor_solucao - resultado[:bound_inferior]) / resultado[:bound_inferior]
-                resultado[:gap_timeout] = gap
-                println("Melhor solução: $(round(melhor_solucao, digits=6)), Gap: $(round(gap, digits=2))%")
-            else
-                println("Melhor solução: $(round(melhor_solucao, digits=6))")
+            # Extrair solução
+            operadores_tempo = zeros(Float64, m)
+            operadores_tarefas = [Int[] for _ in 1:m]
+            
+            for k in 1:m
+                tarefas = [i for i in 1:n if y_sol[i,k] > 0.5]
+                if !isempty(tarefas)
+                    operadores_tarefas[k] = tarefas
+                    operadores_tempo[k] = sum(p[i,k] for i in tarefas)
+                end
             end
-        catch
-            println("Nenhuma solução factível encontrada no timeout")
-            resultado[:melhor_solucao_timeout] = nothing
+            
+            # Verificar contiguidade
+            violacoes_contiguidade = 0
+            for k in 1:m
+                if length(operadores_tarefas[k]) > 1
+                    tarefas_ordenadas = sort(operadores_tarefas[k])
+                    for i in 1:length(tarefas_ordenadas)-1
+                        if tarefas_ordenadas[i+1] - tarefas_ordenadas[i] > 1
+                            violacoes_contiguidade += 1
+                        end
+                    end
+                end
+            end
+            
+            # Métricas adicionais
+            balanceamento = length(operadores_tempo) > 1 ? std(operadores_tempo) / mean(operadores_tempo) : 0.0
+            operadores_usados = count(t -> t > 0, operadores_tempo)
+            
+            resultado[:makespan] = makespan
+            resultado[:operadores_tempo] = operadores_tempo
+            resultado[:operadores_tarefas] = operadores_tarefas
+            resultado[:violacoes_contiguidade] = violacoes_contiguidade
+            resultado[:balanceamento] = balanceamento
+            resultado[:operadores_usados] = operadores_usados
+            resultado[:solucao_valida] = true
+        else
+            resultado[:solucao_valida] = false
         end
-        
     else
-        println("Falha na resolução: $status")
-        resultado[:erro] = string(status)
+        resultado[:solucao_valida] = false
     end
-    
-    resultado[:tempo_total] = time() - tempo_inicio_total
-    
-    println("Tempo total: $(round(resultado[:tempo_total], digits=2))s")
-    println()
     
     return resultado
 end
 
-# ————————— Execução dos experimentos —————————
-function executar_experimentos_solver()
-    println("=== COLETA DE DADOS - SOLVER (GLPK) ===")
+# ————————— SOLVER MELHORADO COM DADOS —————————
+function solver_melhorado_dados(p::Matrix{Float64}, n::Int, m::Int; solver_time_limit=600)
+    tempo_inicio = time()
+    
+    model = Model(GLPK.Optimizer)
+    set_time_limit_sec(model, solver_time_limit)
+    set_silent(model)
+    
+    @variable(model, y[i=1:n, k=1:m], Bin)
+    @variable(model, T >= 0)
+    
+    @objective(model, Min, T)
+    
+    # Restrições básicas
+    @constraint(model, [i=1:n], sum(y[i,k] for k=1:m) == 1)
+    @constraint(model, [k=1:m], sum(p[i,k] * y[i,k] for i=1:n) <= T)
+    
+    # Restrições de contiguidade
+    num_contiguidade = 0
+    for k in 1:m
+        for i in 1:n-1
+            for j in i+2:n
+                @constraint(model, y[i,k] - y[i+1,k] + y[j,k] <= 1)
+                num_contiguidade += 1
+            end
+        end
+    end
+    
+    num_vars = num_variables(model)
+    num_constrs = num_constraints(model; count_variable_in_set_constraints=false)
+    
+    optimize!(model)
+    
+    tempo_solver = time() - tempo_inicio
+    status = termination_status(model)
+    
+    resultado = Dict(
+        :tipo => "solver_melhorado",
+        :status => status,
+        :tempo_execucao => tempo_solver,
+        :num_variaveis => num_vars,
+        :num_restricoes => num_constrs,
+        :restricoes_contiguidade => num_contiguidade,
+        :timeout_configurado => solver_time_limit
+    )
+    
+    if status == MOI.OPTIMAL || status == MOI.TIME_LIMIT || status == MOI.FEASIBLE_POINT
+        if has_values(model)
+            makespan = objective_value(model)
+            y_sol = value.(y)
+            
+            # Extrair e validar solução
+            operadores_tempo = zeros(Float64, m)
+            operadores_tarefas = [Int[] for _ in 1:m]
+            contiguidade_perfeita = true
+            
+            for k in 1:m
+                tarefas = [i for i in 1:n if y_sol[i,k] > 0.5]
+                if !isempty(tarefas)
+                    operadores_tarefas[k] = sort(tarefas)
+                    operadores_tempo[k] = sum(p[i,k] for i in tarefas)
+                    
+                    # Verificar contiguidade
+                    if length(tarefas) > 1
+                        for i in 1:length(operadores_tarefas[k])-1
+                            if operadores_tarefas[k][i+1] - operadores_tarefas[k][i] > 1
+                                contiguidade_perfeita = false
+                                break
+                            end
+                        end
+                    end
+                end
+            end
+            
+            balanceamento = length(operadores_tempo) > 1 ? std(operadores_tempo) / mean(operadores_tempo) : 0.0
+            operadores_usados = count(t -> t > 0, operadores_tempo)
+            
+            resultado[:makespan] = makespan
+            resultado[:operadores_tempo] = operadores_tempo
+            resultado[:operadores_tarefas] = operadores_tarefas
+            resultado[:contiguidade_perfeita] = contiguidade_perfeita
+            resultado[:balanceamento] = balanceamento
+            resultado[:operadores_usados] = operadores_usados
+            resultado[:solucao_valida] = true
+        else
+            resultado[:solucao_valida] = false
+        end
+    else
+        resultado[:solucao_valida] = false
+    end
+    
+    return resultado
+end
+
+# ————————— EXECUTAR EXPERIMENTOS PARA UMA INSTÂNCIA —————————
+function executar_instancia_completa(instancia::String, p::Matrix{Float64}, n::Int, m::Int)
+    println("Processando $instancia (n=$n, m=$m)...")
+    tempo_inicio_total = time()
+    
+    resultados = Dict(
+        :instancia => instancia,
+        :n => n,
+        :m => m,
+        :timestamp => Dates.now()
+    )
+    
+    # 1. Heurística gulosa
+    print("Heurística gulosa... ")
+    resultado_gulosa = heuristica_gulosa_dados(p, n, m)
+    println("Makespan: $(round(resultado_gulosa[:makespan], digits=6)) ($(round(resultado_gulosa[:tempo_execucao]*1000, digits=1))ms)")
+    resultados[:heuristica_gulosa] = resultado_gulosa
+    
+    # 2. Heurística com contiguidade
+    print("Heurística c/ contiguidade... ")
+    resultado_contiguidade = heuristica_contiguidade_dados(p, n, m)
+    println("Makespan: $(round(resultado_contiguidade[:makespan], digits=6)) ($(round(resultado_contiguidade[:tempo_execucao]*1000, digits=1))ms)")
+    resultados[:heuristica_contiguidade] = resultado_contiguidade
+    
+    # 3. Solver simples
+    print("Solver simples... ")
+    resultado_simples = solver_simples_dados(p, n, m; solver_time_limit=600)
+    if resultado_simples[:solucao_valida]
+        println("Makespan: $(round(resultado_simples[:makespan], digits=6)) ($(round(resultado_simples[:tempo_execucao], digits=2))s)")
+    else
+        println("$(resultado_simples[:status])")
+    end
+    resultados[:solver_simples] = resultado_simples
+    
+    # 4. Solver melhorado
+    print("Solver melhorado... ")
+    resultado_melhorado = solver_melhorado_dados(p, n, m; solver_time_limit=3600)
+    if resultado_melhorado[:solucao_valida]
+        println("Makespan: $(round(resultado_melhorado[:makespan], digits=6)) ($(round(resultado_melhorado[:tempo_execucao], digits=2))s)")
+    else
+        println("$(resultado_melhorado[:status])")
+    end
+    resultados[:solver_melhorado] = resultado_melhorado
+    
+    resultados[:tempo_total_instancia] = time() - tempo_inicio_total
+    println("Tempo total: $(round(resultados[:tempo_total_instancia], digits=2))s\\n")
+    
+    return resultados
+end
+
+# ————————— EXECUTAR TODOS OS EXPERIMENTOS —————————
+function executar_experimentos_completos()
+    println("=== COLETA DE DADOS - SOLVER SIMPLIFICADO ===")
     println("Data/Hora: $(Dates.now())")
-    println("Configuração: Timeout 5h por instância")
     println()
     
-    instancias = ["tba$i.txt" for i in 1:10]
-    resultados = []
+    # CONTROLE DE INSTÂNCIAS AQUI
+    instancias = ["tba$i.txt" for i in 1:5]  # 1:5 e 6:10
     
+    todos_resultados = []
     tempo_total_experimento = @elapsed begin
         for instancia in instancias
             caminho = "testes/$instancia"
@@ -214,189 +399,204 @@ function executar_experimentos_solver()
             
             # Ler instância
             p, n, m = ler_instancia(caminho)
-            println("$instancia: n=$n tarefas, m=$m operadores")
             
-            # Resolver
-            resultado = resolver_instancia_completo(p, n, m, instancia; solver_time_limit=18000)
-            push!(resultados, resultado)
+            # Executar todos os métodos
+            resultado_instancia = executar_instancia_completa(instancia, p, n, m)
+            push!(todos_resultados, resultado_instancia)
+            
+            # SALVAR PARCIALMENTE após cada instância
+            salvar_resultados_parciais(todos_resultados, "backup_parcial.md")
         end
     end
     
     println("Todos os experimentos concluídos!")
-    println("⏱Tempo total: $(round(tempo_total_experimento/3600, digits=2)) horas")
+    println("Tempo total: $(round(tempo_total_experimento/60, digits=2)) minutos")
     
-    return resultados, tempo_total_experimento
+    return todos_resultados, tempo_total_experimento
 end
 
-# ————————— Geração de relatório —————————
-function gerar_relatorio_solver(resultados::Vector, tempo_total::Float64; arquivo_saida="relatorio_solver.md")
-    open(arquivo_saida, "w") do io
-        println(io, "# Relatório de Experimentos - Solver (GLPK)")
-        println(io, "")
-        println(io, "**Data:** $(Dates.now())")
-        println(io, "**Solver:** GLPK (GNU Linear Programming Kit)")
-        println(io, "**Timeout:** 5 horas por instância")
-        println(io, "**Tempo total do experimento:** $(round(tempo_total/3600, digits=2)) horas")
-        println(io, "")
-        
-        # Resumo executivo
-        println(io, "## Resumo Executivo")
-        println(io, "")
-        otimas = count(r -> get(r, :status_solver, nothing) == MOI.OPTIMAL for r in resultados)
-        timeouts = count(r -> get(r, :status_solver, nothing) == MOI.TIME_LIMIT for r in resultados)
-        falhas = length(resultados) - otimas - timeouts
-        
-        println(io, "- **Instâncias processadas:** $(length(resultados))")
-        println(io, "- **Soluções ótimas:** $otimas")
-        println(io, "- **Timeouts:** $timeouts")
-        println(io, "- **Falhas:** $falhas")
-        println(io, "")
-        
-        # Tabela principal
-        println(io, "## Resultados por Instância")
-        println(io, "")
-        println(io, "| Instância | n | m | Bound Inferior | Status | Makespan | Gap (%) | Tempo Solver (s) | Vars | Restrições |")
-        println(io, "|-----------|---|---|----------------|--------|----------|---------|------------------|------|------------|")
-        
-        for resultado in resultados
-            instancia = resultado[:instancia]
-            n, m = resultado[:n], resultado[:m]
-            bound = resultado[:bound_inferior]
-            status = resultado[:status_solver]
-            
-            makespan = if status == MOI.OPTIMAL
-                resultado[:makespan_otimo]
-            elseif status == MOI.TIME_LIMIT && haskey(resultado, :melhor_solucao_timeout)
-                resultado[:melhor_solucao_timeout]
-            else
-                nothing
-            end
-            
-            gap = if haskey(resultado, :gap_timeout)
-                "$(round(resultado[:gap_timeout], digits=2))"
-            elseif status == MOI.OPTIMAL
-                "0.00"
-            else
-                "N/A"
-            end
-            
-            tempo = round(resultado[:tempo_solver], digits=2)
-            vars = resultado[:num_variaveis]
-            restrs = resultado[:num_restricoes]
-            
-            bound_str = bound === nothing ? "N/A" : "$(round(bound, digits=6))"
-            makespan_str = makespan === nothing ? "N/A" : "$(round(makespan, digits=6))"
-            
-            println(io, "| $instancia | $n | $m | $bound_str | $status | $makespan_str | $gap | $tempo | $vars | $restrs |")
-        end
-        println(io, "")
-        
-        # Detalhes por instância
-        for resultado in resultados
-            instancia = resultado[:instancia]
-            n, m = resultado[:n], resultado[:m]
-            
-            println(io, "## Detalhes: $instancia (n=$n, m=$m)")
-            println(io, "")
-            
-            # Informações gerais
-            println(io, "### Informações Gerais")
-            println(io, "- **Início:** $(resultado[:tempo_inicio])")
-            println(io, "- **Fim:** $(resultado[:tempo_fim])")
-            println(io, "- **Timeout configurado:** $(resultado[:solver_timeout])s ($(round(resultado[:solver_timeout]/3600, digits=1))h)")
-            println(io, "- **Variáveis:** $(resultado[:num_variaveis])")
-            println(io, "- **Restrições:** $(resultado[:num_restricoes])")
-            println(io, "")
-            
-            # Bound inferior
-            println(io, "### Bound Inferior (Modelo Relaxado)")
-            if resultado[:bound_inferior] !== nothing
-                println(io, "- **Valor:** $(resultado[:bound_inferior])")
-                println(io, "- **Tempo de cálculo:** $(round(resultado[:tempo_bound], digits=2))s")
-                println(io, "- **Solução relaxada:**")
-                for atrib in resultado[:solucao_relaxada]
-                    println(io, "  - Operador $(atrib[:operador]): tarefas $(atrib[:tarefas]) (tempo: $(round(atrib[:tempo], digits=6)))")
-                end
-            else
-                println(io, "- **Status:** Falha no cálculo")
-                println(io, "- **Tempo tentativa:** $(round(resultado[:tempo_bound], digits=2))s")
-            end
-            println(io, "")
-            
-            # Resultado do modelo completo
-            println(io, "### Modelo Completo")
-            println(io, "- **Status:** $(resultado[:status_solver])")
-            println(io, "- **Tempo de resolução:** $(round(resultado[:tempo_solver], digits=2))s")
-            
-            if resultado[:status_solver] == MOI.OPTIMAL
-                println(io, "- **Makespan ótimo:** $(resultado[:makespan_otimo])")
-                println(io, "- **Verificação:** $(resultado[:makespan_verificado])")
-                println(io, "")
-                println(io, "#### Solução Ótima")
-                for (i, seg) in enumerate(resultado[:segmentos])
-                    op = resultado[:operadores][i]
-                    tempo = resultado[:tempos_segmentos][i]
-                    println(io, "- **Segmento $i:** tarefas ($(seg[:inicio]), $(seg[:fim])) → Operador $op (tempo: $(round(tempo, digits=6)))")
-                end
-                println(io, "")
-                println(io, "- **Pontos de corte:** $(resultado[:pontos_corte])")
-                
-            elseif resultado[:status_solver] == MOI.TIME_LIMIT
-                if haskey(resultado, :melhor_solucao_timeout)
-                    println(io, "- **Melhor solução encontrada:** $(resultado[:melhor_solucao_timeout])")
-                    if haskey(resultado, :gap_timeout)
-                        println(io, "- **Gap final:** $(round(resultado[:gap_timeout], digits=2))%")
-                    end
-                else
-                    println(io, "- **Resultado:** Nenhuma solução factível encontrada")
-                end
-            end
-            
-            println(io, "")
-            println(io, "- **Tempo total (incluindo bound):** $(round(resultado[:tempo_total], digits=2))s")
-            println(io, "")
-        end
-        
-        # Informações técnicas
-        println(io, "## Informações Técnicas")
-        println(io, "")
-        println(io, "### Formulação Matemática")
-        println(io, "- **Tipo:** Programação Linear Inteira Mista (MILP)")
-        println(io, "- **Objetivo:** Minimizar makespan")
-        println(io, "- **Restrições principais:**")
-        println(io, "  - Cada tarefa pertence a exatamente um segmento")
-        println(io, "  - Cada segmento é atribuído a exatamente um operador")
-        println(io, "  - Cada operador atua em exatamente um segmento")
-        println(io, "  - Segmentos devem ser contíguos (sem lacunas)")
-        println(io, "  - Definição do makespan")
-        println(io, "")
-        println(io, "### Configurações do Solver")
-        println(io, "- **Solver:** GLPK (GNU Linear Programming Kit)")
-        println(io, "- **Versão Julia:** $(VERSION)")
-        println(io, "- **Timeout:** 5 horas (18000 segundos)")
-        println(io, "- **Bound:** Modelo relaxado sem contiguidade (5 min timeout)")
-        println(io, "")
-        println(io, "### Reproducibilidade")
-        println(io, "- **Sistema:** $(Sys.MACHINE)")
-        println(io, "- **Data de execução:** $(Dates.now())")
-        println(io, "- **Comando:** `julia coleta_dados_solver.jl`")
+# ————————— SALVAR RESULTADOS PARCIAIS —————————
+function salvar_resultados_parciais(resultados::Vector, arquivo::String)
+    if isempty(resultados)
+        return
     end
     
-    println("Relatório do solver salvo em: $arquivo_saida")
+    open(arquivo, "w") do io
+        println(io, "# Backup Parcial - $(Dates.now())")
+        println(io, "")
+        println(io, "| Instância | n | m | Gulosa | Contiguidade | Solver Simples | Solver Melhorado |")
+        println(io, "|-----------|---|---|--------|--------------|----------------|------------------|")
+        
+        for resultado in resultados
+            inst = resultado[:instancia]
+            n, m = resultado[:n], resultado[:m]
+            
+            gulosa = round(resultado[:heuristica_gulosa][:makespan], digits=6)
+            contiguidade = round(resultado[:heuristica_contiguidade][:makespan], digits=6)
+            
+            simples = resultado[:solver_simples][:solucao_valida] ? 
+                      round(resultado[:solver_simples][:makespan], digits=6) : "FALHA"
+            
+            melhorado = resultado[:solver_melhorado][:solucao_valida] ? 
+                        round(resultado[:solver_melhorado][:makespan], digits=6) : "FALHA"
+            
+            println(io, "| $inst | $n | $m | $gulosa | $contiguidade | $simples | $melhorado |")
+        end
+    end
 end
 
-# ————————— Função principal —————————
+# ————————— GERAR RELATÓRIO FINAL —————————
+function gerar_relatorio_final(resultados::Vector, tempo_total::Float64; arquivo_saida="relatorio_solver_simplificado.md")
+    open(arquivo_saida, "w") do io
+        println(io, "# Relatório - Formulações Simplificadas para Trabalho Balanceado")
+        println(io, "")
+        println(io, "**Data:** $(Dates.now())")
+        println(io, "**Tempo total:** $(round(tempo_total/60, digits=2)) minutos")
+        println(io, "**Instâncias processadas:** $(length(resultados))")
+        println(io, "")
+        
+        # Tabela comparativa principal
+        println(io, "## Comparação de Métodos")
+        println(io, "")
+        println(io, "| Instância | n | m | Heur. Gulosa | Heur. Contig. | Solver Simples | Solver Melhor. | Tempo Total (s) |")
+        println(io, "|-----------|---|---|--------------|---------------|----------------|----------------|-----------------|")
+        
+        for resultado in resultados
+            inst = resultado[:instancia]
+            n, m = resultado[:n], resultado[:m]
+            tempo_total_inst = round(resultado[:tempo_total_instancia], digits=2)
+            
+            gulosa = round(resultado[:heuristica_gulosa][:makespan], digits=6)
+            contiguidade = round(resultado[:heuristica_contiguidade][:makespan], digits=6)
+            
+            simples = resultado[:solver_simples][:solucao_valida] ? 
+                      "$(round(resultado[:solver_simples][:makespan], digits=6))" : 
+                      "$(resultado[:solver_simples][:status])"
+            
+            melhorado = resultado[:solver_melhorado][:solucao_valida] ? 
+                        "$(round(resultado[:solver_melhorado][:makespan], digits=6))" : 
+                        "$(resultado[:solver_melhorado][:status])"
+            
+            println(io, "| $inst | $n | $m | $gulosa | $contiguidade | $simples | $melhorado | $tempo_total_inst |")
+        end
+        println(io, "")
+        
+        # Análise detalhada por instância
+        for resultado in resultados
+            instancia = resultado[:instancia]
+            n, m = resultado[:n], resultado[:m]
+            
+            println(io, "## Análise Detalhada: $instancia (n=$n, m=$m)")
+            println(io, "")
+            
+            # Resumo dos resultados
+            hg = resultado[:heuristica_gulosa]
+            hc = resultado[:heuristica_contiguidade]
+            ss = resultado[:solver_simples]
+            sm = resultado[:solver_melhorado]
+            
+            println(io, "### Resumo de Performance")
+            println(io, "- **Heurística Gulosa:** $(round(hg[:makespan], digits=6)) ($(round(hg[:tempo_execucao]*1000, digits=1))ms)")
+            println(io, "- **Heurística c/ Contiguidade:** $(round(hc[:makespan], digits=6)) ($(round(hc[:tempo_execucao]*1000, digits=1))ms)")
+            
+            if ss[:solucao_valida]
+                println(io, "- **Solver Simples:** $(round(ss[:makespan], digits=6)) ($(round(ss[:tempo_execucao], digits=2))s)")
+                if haskey(ss, :violacoes_contiguidade)
+                    println(io, "  - Violações de contiguidade: $(ss[:violacoes_contiguidade])")
+                end
+            else
+                println(io, "- **Solver Simples:** FALHA ($(ss[:status]))")
+            end
+            
+            if sm[:solucao_valida]
+                println(io, "- **Solver Melhorado:** $(round(sm[:makespan], digits=6)) ($(round(sm[:tempo_execucao], digits=2))s)")
+                println(io, "  - Contiguidade perfeita: $(sm[:contiguidade_perfeita])")
+            else
+                println(io, "- **Solver Melhorado:** FALHA ($(sm[:status]))")
+            end
+            println(io, "")
+            
+            # Métricas adicionais
+            println(io, "### Métricas Adicionais")
+            println(io, "- **Balanceamento (CV):**")
+            println(io, "  - Heurística Gulosa: $(round(hg[:balanceamento], digits=4))")
+            println(io, "  - Heurística Contiguidade: $(round(hc[:balanceamento], digits=4))")
+            if ss[:solucao_valida]
+                println(io, "  - Solver Simples: $(round(ss[:balanceamento], digits=4))")
+            end
+            if sm[:solucao_valida]
+                println(io, "  - Solver Melhorado: $(round(sm[:balanceamento], digits=4))")
+            end
+            
+            println(io, "- **Operadores utilizados:**")
+            println(io, "  - Heurística Gulosa: $(hg[:operadores_usados])/$m")
+            println(io, "  - Heurística Contiguidade: $(count(t -> t > 0, hc[:operadores_tempo]))/$m")
+            if ss[:solucao_valida]
+                println(io, "  - Solver Simples: $(ss[:operadores_usados])/$m")
+            end
+            if sm[:solucao_valida]
+                println(io, "  - Solver Melhorado: $(sm[:operadores_usados])/$m")
+            end
+            
+            # Impacto da contiguidade
+            if haskey(hc, :perda_qualidade)
+                println(io, "- **Impacto da contiguidade:** +$(round(hc[:perda_qualidade], digits=2))% no makespan")
+                println(io, "- **Mudanças realizadas:** $(hc[:mudancas_realizadas]) operadores")
+            end
+            
+            println(io, "")
+            
+            # Informações técnicas dos solvers
+            println(io, "### Informações Técnicas")
+            println(io, "- **Solver Simples:**")
+            println(io, "  - Variáveis: $(ss[:num_variaveis])")
+            println(io, "  - Restrições: $(ss[:num_restricoes])")
+            println(io, "  - Timeout: $(ss[:timeout_configurado])s")
+            
+            println(io, "- **Solver Melhorado:**")
+            println(io, "  - Variáveis: $(sm[:num_variaveis])")
+            println(io, "  - Restrições: $(sm[:num_restricoes])")
+            if haskey(sm, :restricoes_contiguidade)
+                println(io, "  - Restrições de contiguidade: $(sm[:restricoes_contiguidade])")
+            end
+            println(io, "  - Timeout: $(sm[:timeout_configurado])s")
+            println(io, "")
+        end
+        
+        # Informações gerais
+        println(io, "## Informações Gerais")
+        println(io, "")
+        println(io, "### Métodos Avaliados")
+        println(io, "1. **Heurística Gulosa:** Atribuição tarefa por tarefa ao operador com menor makespan")
+        println(io, "2. **Heurística c/ Contiguidade:** Reorganização da solução gulosa para garantir contiguidade")
+        println(io, "3. **Solver Simples:** MILP sem restrições de contiguidade")
+        println(io, "4. **Solver Melhorado:** MILP com restrições de contiguidade simplificadas")
+        println(io, "")
+        println(io, "### Configurações")
+        println(io, "- **Solver:** GLPK")
+        println(io, "- **Timeout Solver Simples:** 120s")
+        println(io, "- **Timeout Solver Melhorado:** 600s")
+        println(io, "- **Sistema:** $(Sys.MACHINE)")
+        println(io, "- **Julia:** $(VERSION)")
+    end
+    
+    println("Relatório final salvo em: $arquivo_saida")
+end
+
+# ————————— FUNÇÃO PRINCIPAL —————————
 function main()
-    println("Iniciando coleta de dados do solver...")
+    println("Iniciando experimentos com formulações simplificadas...")
     
     # Executar experimentos
-    resultados, tempo_total = executar_experimentos_solver()
+    resultados, tempo_total = executar_experimentos_completos()
     
-    # Gerar relatório
-    gerar_relatorio_solver(resultados, tempo_total)
+    # Gerar relatório final
+    gerar_relatorio_final(resultados, tempo_total)
     
-    println("Coleta de dados do solver concluída!")
-    println("Verifique o arquivo 'relatorio_solver.md' para os resultados detalhados.")
+    println("Experimentos concluídos!")
+    println("Verifique os arquivos:")
+    println("   - relatorio_solver_simplificado.md (relatório final)")
+    println("   - backup_parcial.md (backup de segurança)")
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__
