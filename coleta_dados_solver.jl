@@ -42,39 +42,38 @@ function resolver_instancia_completo(p::Matrix{Float64}, n::Int, m::Int, instanc
     
     # ————————— BOUND INFERIOR (modelo relaxado) —————————
     println("Calculando bound inferior (modelo sem contiguidade)...")
-    tempo_bound = @elapsed begin
-        model_bound = Model(GLPK.Optimizer)
-        set_time_limit_sec(model_bound, 300)  # 5 min para bound
+    
+    model_bound = Model(GLPK.Optimizer)
+    set_time_limit_sec(model_bound, 300)  # 5 min para bound
+    
+    @variable(model_bound, y[i=1:n, k=1:m], Bin)
+    @variable(model_bound, T_bound >= 0)
+    @objective(model_bound, Min, T_bound)
+    @constraint(model_bound, [i=1:n], sum(y[i,k] for k=1:m) == 1)
+    @constraint(model_bound, [k=1:m], sum(p[i,k] * y[i,k] for i=1:n) <= T_bound)
+    
+    tempo_bound = @elapsed optimize!(model_bound)
+    
+    if termination_status(model_bound) == MOI.OPTIMAL
+        resultado[:bound_inferior] = objective_value(model_bound)
+        resultado[:tempo_bound] = tempo_bound
         
-        @variable(model_bound, y[i=1:n, k=1:m], Bin)
-        @variable(model_bound, T_bound >= 0)
-        @objective(model_bound, Min, T_bound)
-        @constraint(model_bound, [i=1:n], sum(y[i,k] for k=1:m) == 1)
-        @constraint(model_bound, [k=1:m], sum(p[i,k] * y[i,k] for i=1:n) <= T_bound)
-        
-        optimize!(model_bound)
-        
-        if termination_status(model_bound) == MOI.OPTIMAL
-            resultado[:bound_inferior] = objective_value(model_bound)
-            resultado[:tempo_bound] = tempo_bound
-            
-            # Extração da solução relaxada
-            y_sol = value.(y)
-            atribuicoes_relaxadas = []
-            for k in 1:m
-                tarefas_k = [i for i in 1:n if y_sol[i,k] > 0.5]
-                if !isempty(tarefas_k)
-                    tempo_k = sum(p[i,k] for i in tarefas_k)
-                    push!(atribuicoes_relaxadas, (operador=k, tarefas=tarefas_k, tempo=tempo_k))
-                end
+        # Extração da solução relaxada
+        y_sol = value.(y)
+        atribuicoes_relaxadas = []
+        for k in 1:m
+            tarefas_k = [i for i in 1:n if y_sol[i,k] > 0.5]
+            if !isempty(tarefas_k)
+                tempo_k = sum(p[i,k] for i in tarefas_k)
+                push!(atribuicoes_relaxadas, (operador=k, tarefas=tarefas_k, tempo=tempo_k))
             end
-            resultado[:solucao_relaxada] = atribuicoes_relaxadas
-            println("Bound inferior: $(round(resultado[:bound_inferior], digits=6)) ($(round(tempo_bound, digits=2))s)")
-        else
-            resultado[:bound_inferior] = nothing
-            resultado[:tempo_bound] = tempo_bound
-            println("Falha no cálculo do bound ($(round(tempo_bound, digits=2))s)")
         end
+        resultado[:solucao_relaxada] = atribuicoes_relaxadas
+        println("Bound inferior: $(round(resultado[:bound_inferior], digits=6)) ($(round(tempo_bound, digits=2))s)")
+    else
+        resultado[:bound_inferior] = nothing
+        resultado[:tempo_bound] = tempo_bound
+        println("Falha no cálculo do bound ($(round(tempo_bound, digits=2))s)")
     end
     
     # ————————— MODELO COMPLETO (com contiguidade) —————————
@@ -201,7 +200,7 @@ function executar_experimentos_solver()
     println("Configuração: Timeout 5h por instância")
     println()
     
-    instancias = ["tba$i.txt" for i in 1:2]    # numero de arquivos a serem rodados todos -> 1:10
+    instancias = ["tba$i.txt" for i in 1:10]
     resultados = []
     
     tempo_total_experimento = @elapsed begin
@@ -224,7 +223,7 @@ function executar_experimentos_solver()
     end
     
     println("Todos os experimentos concluídos!")
-    println("Tempo total: $(round(tempo_total_experimento/3600, digits=2)) horas")
+    println("⏱Tempo total: $(round(tempo_total_experimento/3600, digits=2)) horas")
     
     return resultados, tempo_total_experimento
 end
