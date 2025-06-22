@@ -151,7 +151,7 @@ function heuristica_contiguidade_dados(p::Matrix{Float64}, n::Int, m::Int)
 end
 
 # ————————— SOLVER SIMPLES COM DADOS —————————
-function solver_simples_dados(p::Matrix{Float64}, n::Int, m::Int; solver_time_limit=120)
+function solver_simples_dados(p::Matrix{Float64}, n::Int, m::Int; solver_time_limit=600)
     tempo_inicio = time()
     
     model = Model(GLPK.Optimizer)
@@ -173,6 +173,18 @@ function solver_simples_dados(p::Matrix{Float64}, n::Int, m::Int; solver_time_li
     
     tempo_solver = time() - tempo_inicio
     status = termination_status(model)
+    
+    # Forçar limpeza para evitar bug do GLPK
+    try
+        finalize(model)
+    catch
+    end
+    
+    # Forçar limpeza para evitar bug do GLPK
+    try
+        finalize(model)
+    catch
+    end
     
     resultado = Dict(
         :tipo => "solver_simples",
@@ -235,7 +247,7 @@ function solver_simples_dados(p::Matrix{Float64}, n::Int, m::Int; solver_time_li
 end
 
 # ————————— SOLVER MELHORADO COM DADOS —————————
-function solver_melhorado_dados(p::Matrix{Float64}, n::Int, m::Int; solver_time_limit=600)
+function solver_melhorado_dados(p::Matrix{Float64}, n::Int, m::Int; solver_time_limit=3600)
     tempo_inicio = time()
     
     model = Model(GLPK.Optimizer)
@@ -356,7 +368,8 @@ function executar_instancia_completa(instancia::String, p::Matrix{Float64}, n::I
     print("Solver simples... ")
     resultado_simples = solver_simples_dados(p, n, m; solver_time_limit=600)
     if resultado_simples[:solucao_valida]
-        println("Makespan: $(round(resultado_simples[:makespan], digits=6)) ($(round(resultado_simples[:tempo_execucao], digits=2))s)")
+        status_msg = resultado_simples[:status] == MOI.OPTIMAL ? "ÓTIMO" : "TIMEOUT"
+        println("Makespan: $(round(resultado_simples[:makespan], digits=6)) ($(round(resultado_simples[:tempo_execucao], digits=2))s) [$status_msg]")
     else
         println("$(resultado_simples[:status])")
     end
@@ -366,7 +379,8 @@ function executar_instancia_completa(instancia::String, p::Matrix{Float64}, n::I
     print("Solver melhorado... ")
     resultado_melhorado = solver_melhorado_dados(p, n, m; solver_time_limit=3600)
     if resultado_melhorado[:solucao_valida]
-        println("Makespan: $(round(resultado_melhorado[:makespan], digits=6)) ($(round(resultado_melhorado[:tempo_execucao], digits=2))s)")
+        status_msg = resultado_melhorado[:status] == MOI.OPTIMAL ? "ÓTIMO" : "TIMEOUT"
+        println("Makespan: $(round(resultado_melhorado[:makespan], digits=6)) ($(round(resultado_melhorado[:tempo_execucao], digits=2))s) [$status_msg]")
     else
         println("$(resultado_melhorado[:status])")
     end
@@ -574,8 +588,8 @@ function gerar_relatorio_final(resultados::Vector, tempo_total::Float64; arquivo
         println(io, "")
         println(io, "### Configurações")
         println(io, "- **Solver:** GLPK")
-        println(io, "- **Timeout Solver Simples:** 120s")
-        println(io, "- **Timeout Solver Melhorado:** 600s")
+        println(io, "- **Timeout Solver Simples:** 600s")
+        println(io, "- **Timeout Solver Melhorado:** 3600")
         println(io, "- **Sistema:** $(Sys.MACHINE)")
         println(io, "- **Julia:** $(VERSION)")
     end
