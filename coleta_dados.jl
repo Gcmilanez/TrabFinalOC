@@ -252,7 +252,7 @@ function executar_experimentos()
     
     # Configurações
     instancias = ["tba$i.txt" for i in 1:10]
-    num_execucoes = 15
+    num_execucoes = 30
     iter_max = 5_000_000
     
     # Estrutura para armazenar todos os resultados
@@ -302,7 +302,7 @@ function gerar_relatorio(resultados::Dict; arquivo_saida="relatorio_vns.md")
         println(io, "# Relatório de Experimentos - VNS para Trabalho Balanceado")
         println(io, "")
         println(io, "**Data:** $(Dates.now())")
-        println(io, "**Configuração:** 15 execuções por instância, 5M iterações máximas")
+        println(io, "**Configuração:** 30 execuções por instância, 5M iterações máximas")
         println(io, "")
         
         # Resumo geral
