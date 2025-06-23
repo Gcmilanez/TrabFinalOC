@@ -11,3 +11,8 @@
 ## Dependências julia para solver genérico GLPK
 
 - julia -e 'using Pkg; Pkg.add(["JuMP", "GLPK"])'
+
+## Execução do código com meta-heurística VNS
+
+- julia vns.jl <arquivo_base> [iter_max] [num_runs]
+

@@ -210,31 +210,69 @@ end
 
 # ————————— Main —————————
 function main()
-    arquivo = "testes/tba9.txt"
-    println("Lendo instancia: ",arquivo)
-    p,n,m = ler_instancia(arquivo)
+    # primeiro ARGS[1] deve ser nome do arquivo na pasta 'testes'
+    if length(ARGS) < 1
+        println("Uso: julia vns.jl <arquivo_base> [iter_max] [num_runs]")
+        println("Ex: julia vns.jl tba1.txt 5000000 50")
+        exit(1)
+    end
+    # monta caminho de entrada sempre em 'testes'
+    input_base = ARGS[1]  # ex: "tba1.txt"
+    input_file = joinpath("testes", input_base)
+    println("Lendo instância: ", input_file)
+    p, n, m = ler_instancia(input_file)
+    # parâmetros opcionais de iterações e repetições
+    iter_max = length(ARGS) >= 2 ? parse(Int, ARGS[2]) : 5_000_000
+    num_runs = length(ARGS) >= 3 ? parse(Int, ARGS[3]) : 50
 
-    best_borders = []
-    best_op= []
-    bestT = Inf
+    best_borders = Vector{Int}()
+    best_op      = Vector{Int}()
+    bestT        = Inf
+    counts       = Dict{Float64,Int}()
 
-    #testa 20 amostras do VNS até achar sol ótima
-    for i in 1:20
-        borders,π,T = VNS(p; iter_max=5000000)                            
+    # Multi-start do VNS
+    for i in 1:num_runs
+        borders, π, T = VNS(p; iter_max=iter_max)
+        counts[T] = get(counts, T, 0) + 1
         if T < bestT
-            best_borders = borders
-            best_op= π
-            bestT = T
+            bestT        = T
+            best_borders = copy(borders)
+            best_op      = copy(π)
         end
-        println("iteração ",i, " T= ", T)
+        println("iteração ", i, " → T= ", @sprintf("%.6f", T))
     end
 
-    println("Resultado final: Makespan = ",@sprintf("%.3f",bestT))
-    for i in 1:m
-        println("Segmento: ",(best_borders[i], best_borders[i+1]-1), " Operador= ", best_op[i])
+    # Imprime melhor solução na tela
+    println("\n=== Melhor SOLUÇÃO ===")
+    println("Makespan ótimo = ", @sprintf("%.6f", bestT))
+    for j in 1:m
+        println("Segmento ", j, ": (", best_borders[j], "–", best_borders[j+1]-1, ") Operador=", best_op[j])
     end
+
+    # Imprime contagem de makespans
+    println("\nContagem de makespans:")
+    for (Tval, cnt) in sort(collect(counts); by = x->x[1])
+        println("T=", @sprintf("%.6f", Tval), " apareceu ", cnt, " vezes")
+    end
+
+    # Grava resultado na pasta output/solucao_<base>.txt
+    base = splitext(basename(input_base))[1]  # ex: "tba1"
+    outdir = "output"
+    isdir(outdir) || mkpath(outdir)
+    output_file = joinpath(outdir, "solucao_" * base * ".txt")
+    open(output_file, "w") do io
+        println(io, "Makespan ótimo = ", @sprintf("%.6f", bestT))
+        for j in 1:m
+            println(io, "Segmento ", j, ": (", best_borders[j], "–", best_borders[j+1]-1, ") Operador=", best_op[j])
+        end
+        println(io, "\nContagem de makespans:")
+        for (Tval, cnt) in sort(collect(counts); by = x->x[1])
+            println(io, "T=", @sprintf("%.6f", Tval), " apareceu ", cnt, " vezes")
+        end
+    end
+    println("Resultados gravados em: ", output_file)
 end
 
-if abspath(PROGRAM_FILE)==@__FILE__
+if abspath(PROGRAM_FILE) == @__FILE__
     main()
-end
+end 
