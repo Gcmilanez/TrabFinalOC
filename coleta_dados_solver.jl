@@ -34,7 +34,7 @@ function heuristica_gulosa_dados(p::Matrix{Float64}, n::Int, m::Int)
     # Inicializar
     operadores_tempo = zeros(Float64, m)
     operadores_tarefas = [Int[] for _ in 1:m]
-    decisoes_por_tarefa = []
+    decisoes_por_tarefa = [] 
     
     # Para cada tarefa, escolher o operador que resulta no menor makespan
     for i in 1:n
@@ -151,7 +151,7 @@ function heuristica_contiguidade_dados(p::Matrix{Float64}, n::Int, m::Int)
 end
 
 # ————————— SOLVER SIMPLES COM DADOS —————————
-function solver_simples_dados(p::Matrix{Float64}, n::Int, m::Int; solver_time_limit=600)
+function solver_simples_dados(p::Matrix{Float64}, n::Int, m::Int; solver_time_limit=1200)
     tempo_inicio = time()
     
     model = Model(GLPK.Optimizer)
@@ -247,7 +247,7 @@ function solver_simples_dados(p::Matrix{Float64}, n::Int, m::Int; solver_time_li
 end
 
 # ————————— SOLVER MELHORADO COM DADOS —————————
-function solver_melhorado_dados(p::Matrix{Float64}, n::Int, m::Int; solver_time_limit=3600)
+function solver_melhorado_dados(p::Matrix{Float64}, n::Int, m::Int; solver_time_limit=10800)
     tempo_inicio = time()
     
     model = Model(GLPK.Optimizer)
@@ -366,7 +366,7 @@ function executar_instancia_completa(instancia::String, p::Matrix{Float64}, n::I
     
     # 3. Solver simples
     print("Solver simples... ")
-    resultado_simples = solver_simples_dados(p, n, m; solver_time_limit=600)
+    resultado_simples = solver_simples_dados(p, n, m; solver_time_limit=1200)
     if resultado_simples[:solucao_valida]
         status_msg = resultado_simples[:status] == MOI.OPTIMAL ? "ÓTIMO" : "TIMEOUT"
         println("Makespan: $(round(resultado_simples[:makespan], digits=6)) ($(round(resultado_simples[:tempo_execucao], digits=2))s) [$status_msg]")
@@ -377,7 +377,7 @@ function executar_instancia_completa(instancia::String, p::Matrix{Float64}, n::I
     
     # 4. Solver melhorado
     print("Solver melhorado... ")
-    resultado_melhorado = solver_melhorado_dados(p, n, m; solver_time_limit=3600)
+    resultado_melhorado = solver_melhorado_dados(p, n, m; solver_time_limit=10800)
     if resultado_melhorado[:solucao_valida]
         status_msg = resultado_melhorado[:status] == MOI.OPTIMAL ? "ÓTIMO" : "TIMEOUT"
         println("Makespan: $(round(resultado_melhorado[:makespan], digits=6)) ($(round(resultado_melhorado[:tempo_execucao], digits=2))s) [$status_msg]")
@@ -399,7 +399,7 @@ function executar_experimentos_completos()
     println()
     
     # CONTROLE DE INSTÂNCIAS AQUI
-    instancias = ["tba$i.txt" for i in 1:5]  # 1:5 e 6:10
+    instancias = ["tba$i.txt" for i in 6:10]  # 1:5 e 6:10
     
     todos_resultados = []
     tempo_total_experimento = @elapsed begin
@@ -472,8 +472,8 @@ function gerar_relatorio_final(resultados::Vector, tempo_total::Float64; arquivo
         # Tabela comparativa principal
         println(io, "## Comparação de Métodos")
         println(io, "")
-        println(io, "| Instância | n | m | Heur. Gulosa | Heur. Contig. | Solver Simples | Solver Melhor. | Tempo Total (s) |")
-        println(io, "|-----------|---|---|--------------|---------------|----------------|----------------|-----------------|")
+        println(io, "| Instância | n | m | Heur. Gulosa | Heur. Contig. | Solver Simples | Solver Melhor. | Melhor | Tempo Total (s) |")
+        println(io, "|-----------|---|---|--------------|---------------|----------------|----------------|--------|-----------------|")
         
         for resultado in resultados
             inst = resultado[:instancia]
@@ -491,7 +491,27 @@ function gerar_relatorio_final(resultados::Vector, tempo_total::Float64; arquivo
                         "$(round(resultado[:solver_melhorado][:makespan], digits=6))" : 
                         "$(resultado[:solver_melhorado][:status])"
             
-            println(io, "| $inst | $n | $m | $gulosa | $contiguidade | $simples | $melhorado | $tempo_total_inst |")
+            melhor = haskey(resultado, :melhor_makespan) ? "$(round(resultado[:melhor_makespan], digits=6))" : "N/A"
+            
+            println(io, "| $inst | $n | $m | $gulosa | $contiguidade | $simples | $melhorado | $melhor | $tempo_total_inst |")
+        end
+        println(io, "")
+        
+        # Tabela de gaps
+        println(io, "## Gaps Relativos ao Melhor Método (%)")
+        println(io, "")
+        println(io, "| Instância | Gap Gulosa | Gap Contiguidade | Gap Simples | Gap Melhorado |")
+        println(io, "|-----------|------------|------------------|-------------|---------------|")
+        
+        for resultado in resultados
+            inst = resultado[:instancia]
+            
+            gap_gulosa = haskey(resultado, :gap_gulosa) ? "$(round(resultado[:gap_gulosa], digits=2))" : "N/A"
+            gap_contiguidade = haskey(resultado, :gap_contiguidade) ? "$(round(resultado[:gap_contiguidade], digits=2))" : "N/A"
+            gap_simples = haskey(resultado, :gap_simples) ? "$(round(resultado[:gap_simples], digits=2))" : "N/A"
+            gap_melhorado = haskey(resultado, :gap_melhorado) ? "$(round(resultado[:gap_melhorado], digits=2))" : "N/A"
+            
+            println(io, "| $inst | $gap_gulosa | $gap_contiguidade | $gap_simples | $gap_melhorado |")
         end
         println(io, "")
         
@@ -501,6 +521,23 @@ function gerar_relatorio_final(resultados::Vector, tempo_total::Float64; arquivo
             n, m = resultado[:n], resultado[:m]
             
             println(io, "## Análise Detalhada: $instancia (n=$n, m=$m)")
+            # Gaps relativos
+            println(io, "### Gaps Relativos ao Melhor Método")
+            if haskey(resultado, :melhor_makespan)
+                println(io, "- **Melhor makespan geral:** $(round(resultado[:melhor_makespan], digits=6))")
+                if haskey(resultado, :gap_gulosa)
+                    println(io, "- **Gap Heurística Gulosa:** $(round(resultado[:gap_gulosa], digits=2))%")
+                end
+                if haskey(resultado, :gap_contiguidade)
+                    println(io, "- **Gap Heurística Contiguidade:** $(round(resultado[:gap_contiguidade], digits=2))%")
+                end
+                if haskey(resultado, :gap_simples)
+                    println(io, "- **Gap Solver Simples:** $(round(resultado[:gap_simples], digits=2))%")
+                end
+                if haskey(resultado, :gap_melhorado)
+                    println(io, "- **Gap Solver Melhorado:** $(round(resultado[:gap_melhorado], digits=2))%")
+                end
+            end
             println(io, "")
             
             # Resumo dos resultados
@@ -588,8 +625,8 @@ function gerar_relatorio_final(resultados::Vector, tempo_total::Float64; arquivo
         println(io, "")
         println(io, "### Configurações")
         println(io, "- **Solver:** GLPK")
-        println(io, "- **Timeout Solver Simples:** 600s")
-        println(io, "- **Timeout Solver Melhorado:** 3600")
+        println(io, "- **Timeout Solver Simples:** 1200s")
+        println(io, "- **Timeout Solver Melhorado:** 10800s")
         println(io, "- **Sistema:** $(Sys.MACHINE)")
         println(io, "- **Julia:** $(VERSION)")
     end
