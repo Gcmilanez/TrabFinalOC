@@ -1,5 +1,5 @@
 #!/usr/bin/env julia
-# solver_melhorado.jl
+# solver.jl
 # Formulação para Trabalho Balanceado
 
 using JuMP, GLPK, Printf
