@@ -259,7 +259,7 @@ function main()
     base = splitext(basename(input_base))[1]  # ex: "tba1"
     outdir = "output"
     isdir(outdir) || mkpath(outdir)
-    output_file = joinpath(outdir, "solucao_" * base * ".txt")
+    output_file = joinpath(outdir, "solucao_VNS_" * base * ".txt")
     open(output_file, "w") do io
         println(io, "Makespan ótimo = ", @sprintf("%.6f", bestT))
         for j in 1:m
