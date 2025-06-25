@@ -1,5 +1,5 @@
 #!/usr/bin/env julia
-# trab_dados_completos.jl
+# VNS-SI-deterministica.jl
 # VNS com coleta completa de dados para análise comparativa
 
 using Random, Printf, Dates, Statistics
